@@ -4,6 +4,14 @@ nltk.download('stopwords')
 from nltk.corpus import stopwords
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import datetime
+import re
+import json
+import requests
+nltk.download('vader_lexicon')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 def today_news():
   toPublishedDate = datetime.datetime.today().strftime('%Y-%m-%d')
