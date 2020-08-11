@@ -18,6 +18,10 @@ def today_news():
   response = requests.request("GET", url, headers=headers, params=querystring)
   response_json = response.json()['value']
 
+  sid = SentimentIntensityAnalyzer()
+  general_polarity = {'neg': 0.0, 'neu': 0.0, 'pos': 0.0}
+  scaled_polarity = {'neg': 0.0, 'neu': 0.0, 'pos': 0.0}
+
   descriptions = []
   for i in range(len(response_json)):
     description = response_json[i]['description']
@@ -28,6 +32,13 @@ def today_news():
       description_lower = one_space.lower() # transform characters into lower-case
       description_words = ' '.join(w for w in description_lower.split() if len(w)>1) # remove single characters
       descriptions.append(description_words) # save descriptions context
+      polarity = sid.polarity_scores(description_words) # obtain polarities
+      for polar in ['neg', 'neu', 'pos']:
+        general_polarity[polar] += polarity[polar]
+
+  for polar in general_polarity:
+    scaled_polarity[polar] = general_polarity[polar] / sum(general_polarity.values())
+  print("negative:", round(scaled_polarity['neg'], 4), "positive:", round(scaled_polarity['pos'], 4), "neutral:", round(scaled_polarity['neu'], 4))
 
   Stopwords = set(stopwords.words('english'))
   Stemmer = nltk.stem.SnowballStemmer('english')
