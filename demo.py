@@ -1,18 +1,13 @@
-#!/usr/bin/env python
-# coding: utf-8
 
-# In[98]:
-
-
-#from google.colab import drive
-# drive.mount('/content/drive')
-
-
-# In[99]:
-
-
-import tensorflow as tf
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import requests
+import json
+import re
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from nltk.corpus import stopwords
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
@@ -25,7 +20,54 @@ from pandas_datareader import data
 from pandas_datareader._utils import RemoteDataError
 from datetime import timedelta
 import datetime
-from sklearn.model_selection import GridSearchCV
+
+# fetch news of today's and create wordcloud of the keywords
+import nltk
+nltk.download('stopwords')
+nltk.download('vader_lexicon')
+
+
+def today_news():
+    toPublishedDate = datetime.datetime.today().strftime('%Y-%m-%d')
+    fromPublishedDate = (datetime.datetime.today() -
+                         datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+
+    url = "https://contextualwebsearch-websearch-v1.p.rapidapi.com/api/Search/NewsSearchAPI"
+    querystring = {"autoCorrect": "false", "pageNumber": "1", "pageSize": "30", "q": "Bitcoin",
+                   "safeSearch": "false", "fromPublishedDate": fromPublishedDate, "toPublishedDate": toPublishedDate}
+    headers = {
+        'x-rapidapi-host': "contextualwebsearch-websearch-v1.p.rapidapi.com",
+        'x-rapidapi-key': "6e64d32139msh66d110fec2ee5d6p1b2f8ajsn506563d39c4e"
+    }
+    response = requests.request(
+        "GET", url, headers=headers, params=querystring)
+    response_json = response.json()['value']
+
+    sid = SentimentIntensityAnalyzer()
+    general_polarity = {'neg': 0.0, 'neu': 0.0, 'pos': 0.0}
+    scaled_polarity = {'neg': 0.0, 'neu': 0.0, 'pos': 0.0}
+
+    descriptions = []
+    for i in range(len(response_json)):
+        description = response_json[i]['description']
+        if description:
+            non_symbols = re.sub(r'[^\w]', ' ', description)  # remove symbols
+            non_digits = re.sub(r'\d+', ' ', non_symbols)  # remove digits
+            # remove extra whitespaces
+            one_space = re.sub(' +', ' ', non_digits)
+            description_lower = one_space.lower()  # transform characters into lower-case
+            description_words = ' '.join(
+                w for w in description_lower.split() if len(w) > 1)  # remove single characters
+            descriptions.append(description_words)  # save descriptions context
+            polarity = sid.polarity_scores(
+                description_words)  # obtain polarities
+            for polar in ['neg', 'neu', 'pos']:
+                general_polarity[polar] += polarity[polar]
+
+    for polar in general_polarity:
+        scaled_polarity[polar] = general_polarity[polar] / \
+            sum(general_polarity.values())
+    return scaled_polarity
 
 # Please read, my idea was to classify the data into three cateogries: "UP", "DOWN", "NEUTRAL"
 # UP - the price of the stock is up MINIMUM_GAIN percent after LOOK_AHEAD_DAYS days.
@@ -37,6 +79,7 @@ from sklearn.model_selection import GridSearchCV
 # is neither up nor down 5%, then we mark it as 'NEUTRAL'
 
 # MINIMUM_GAIN = .05 #minimal gain to be considered up or down for classification, UNUSED NOW
+
 
 LOOK_BACK_DAYS = 30  # number of days into the past we would like to take into account
 LOOK_AHEAD_DAYS = 1  # number of days into the future we are trying to predict
@@ -64,7 +107,7 @@ btc_df = Utilities.getData(
 btc_df
 
 
-# In[100]:
+# In[84]:
 
 
 def createLookBackCols():
@@ -117,9 +160,8 @@ for index, row in btc_df.iterrows():
 btc_df = btc_df[btc_df.High_Past_1 != 'N/A']
 btc_df
 
-
-# In[101]:
-
+today_x = btc_df.tail(1)
+# In[85]:
 
 # introduce new column that will be the trend we are predicting
 btc_df = btc_df.assign(MonthTrend=lambda x: "N/A")
@@ -151,8 +193,7 @@ btc_df = btc_df[btc_df.MonthTrend != 'N/A']
 # There are 3 values for MonthTrend: UP, DOWN,NEUTRAL
 btc_df
 
-
-# In[102]:
+# In[86]:
 
 
 def generateFeatures(features):
@@ -165,14 +206,18 @@ def generateFeatures(features):
 
 
 features = generateFeatures(['Close', 'Open'])
+today_x = today_x[features]
+polarities = today_news()
+today_x["negative"] = [polarities['neg']]
+today_x["neutral"] = [polarities['neu']]
+today_x["positive"] = [polarities['pos']]
 features.append('MonthTrend')
 
 # selecting the important feature open close
 btc = btc_df[features]
 btc
 
-
-# In[103]:
+# In[87]:
 
 
 # load pre-fetched news sentiment data and add in the dataframe
@@ -198,37 +243,54 @@ sentiment_data.columns = ['negative', 'neutral', 'positive']
 # add sentiment in the dataframe
 btc[['negative', 'neutral', 'positive']
     ] = sentiment_data[['negative', 'neutral', 'positive']]
+btc = btc.dropna()
 btc
 
+
+# In[88]:
+
+
+Y = btc['MonthTrend']
 le = LabelEncoder()
+Y = le.fit_transform(Y)
+X = btc.drop(['MonthTrend'], axis=1)
+X = StandardScaler().fit_transform(X)
+today_x = StandardScaler().fit_transform(today_x)
+# Create training and testing datasets that are appropriate for time series data
+#X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=.3, random_state=2)
+train_size_perc = 0.7
+n_time, n_features = X.shape
+train_size = np.int16(np.round(train_size_perc * n_time))
+X_train, Y_train = X[:X.shape[0]], Y[:X.shape[0]]
 
-i = 5
-train_df = btc[i: i + LOOK_BACK_DAYS + 1]
-X_TRAIN = train_df.drop(['MonthTrend'], axis=1)
-Y_TRAIN = le.fit_transform(train_df['MonthTrend'])
-test_df = btc[i + LOOK_BACK_DAYS + LOOK_AHEAD_DAYS: i +
-              LOOK_BACK_DAYS + LOOK_AHEAD_DAYS + 1]
-X_TEST = test_df.drop(['MonthTrend'], axis=1)
-results_df = btc[i + LOOK_BACK_DAYS + 2 *
-                 LOOK_AHEAD_DAYS: i + LOOK_BACK_DAYS + 2*LOOK_AHEAD_DAYS + 1]
 
+# In[89]:
+
+
+# decision tree
+
+
+# logistic regression
 model_regression = LogisticRegression()
 param_grid = {
     'C': [1, 2, 4, 6, 8, 10],
     'penalty': ["l1", "l2"],
     'fit_intercept': [True, False],
     'class_weight': ["balanced", None],
-    'warm_start': [True, False]}   # simplified the CV to reduce the strain on my PC
-regression_grid = GridSearchCV(model_regression, param_grid, cv=TimeSeriesSplit(
+    'warm_start': [True, False]}
+regression_grid = GridSearchCV(model_regression, param_grid, scoring="roc_auc", cv=TimeSeriesSplit(
     max_train_size=None, n_splits=10), verbose=1, n_jobs=6)
-regression_grid.fit(X_TRAIN, Y_TRAIN)
+regression_grid.fit(X_train, Y_train)
 model_regresssion = regression_grid.best_estimator_
+#regression_error_rate = 1 - model_regresssion.score(X_test, Y_test)
+# regression_error_rate
 
-prediction = model_regresssion.predict(X_TEST)[0]
-if prediction == 1:
-    print(" Bitcoin price is predicted to go up tomorrow")
+
+# In[105]:
+
+
+regression_prediction = model_regresssion.predict(today_x)
+if regression_prediction[0] == 0:
+    print("price of BTC predicted to go down tomorrow")
 else:
-    print(" Bitcoin price is predicted to go down tomorrow")
-
-
-# %%
+    print("price of BTC predicted to go up tomorrow")
